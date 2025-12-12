@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Iterable
 
 import duckdb
@@ -10,12 +11,33 @@ import yfinance as yf
 class MarketCache:
     def __init__(self, db_path : str = "data/yfinance/yfinance_cache.duckdb"):
         self.db_path = db_path
-        self.conn = duckdb.connect(self.db_path)
         self._initialize_db()
+        self._ro_conn = duckdb.connect(self.db_path, read_only=True)
 
+    def close(self) -> None:
+        if getattr(self, "_ro_conn", None) is not None:
+            self._ro_conn.close()
+            self._ro_conn = None
+
+    @contextmanager
+    def _write_conn(self):
+        ro_conn = getattr(self, "_ro_conn", None)
+        if ro_conn is not None:
+            ro_conn.close()
+            self._ro_conn = None
+
+        conn = duckdb.connect(self.db_path, read_only=False)
+        try:
+            yield conn
+        finally:
+            conn.close()
+            self._ro_conn = duckdb.connect(self.db_path, read_only=True)
 
     def _initialize_db(self):
-        self.conn.execute("""
+        # Ensure schema exists (requires a read-write connection).
+        conn = duckdb.connect(self.db_path, read_only=False)
+        try:
+            conn.execute("""
         CREATE TABLE IF NOT EXISTS prices (
             ticker      VARCHAR NOT NULL,
             interval    VARCHAR NOT NULL,    
@@ -35,7 +57,7 @@ class MarketCache:
         );
         """)
 
-        self.conn.execute("""
+            conn.execute("""
         CREATE TABLE IF NOT EXISTS coverage_windows (
             ticker      VARCHAR NOT NULL,
             interval    VARCHAR NOT NULL,
@@ -46,6 +68,8 @@ class MarketCache:
             -- invariant: for each (ticker, interval), windows do NOT overlap and are sorted by start_ts
         );
         """)
+        finally:
+            conn.close()
 
     def cache_summary(self):
         # Return a summary of cached data coverage, for every ticker. Show all coverage windows, for every ticker
@@ -54,7 +78,7 @@ class MarketCache:
             FROM coverage_windows
             ORDER BY ticker, interval, start_ts
         """
-        return self.conn.execute(query).fetchdf()
+        return self._ro_conn.execute(query).fetchdf()
     
     def get_prices(self, tickers: Iterable[str], start, end, interval="1d"):
         if interval not in {"1d", "1wk", "1mo", "1h", "30m", "15m", "5m", "2m", "1m"}:
@@ -87,7 +111,7 @@ class MarketCache:
             ORDER BY ticker, ts
         """.format(",".join("?" for _ in tickers))
         params = list(tickers) + [interval, start, end]
-        data = self.conn.execute(query, params).fetchdf()
+        data = self._ro_conn.execute(query, params).fetchdf()
 
         return self._format_like_yf(data, tickers)
 
@@ -130,17 +154,19 @@ class MarketCache:
                 records.append(record)
 
         if records:
-            self.conn.executemany("""
-                INSERT OR REPLACE INTO prices 
-                (ticker, interval, ts, open, high, low, close, adj_close, volume, source, downloaded_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, [(
-                r['ticker'], r['interval'], r['ts'], r['open'], r['high'], r['low'], r['close'],
-                r['adj_close'], r['volume'], r['source'], r['downloaded_at']
-            ) for r in records])
+            # Only hold a write connection during the actual DB modifications.
+            with self._write_conn() as conn:
+                conn.executemany("""
+                    INSERT OR REPLACE INTO prices 
+                    (ticker, interval, ts, open, high, low, close, adj_close, volume, source, downloaded_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, [(
+                    r['ticker'], r['interval'], r['ts'], r['open'], r['high'], r['low'], r['close'],
+                    r['adj_close'], r['volume'], r['source'], r['downloaded_at']
+                ) for r in records])
 
-            for ticker in sorted({r["ticker"] for r in records}):
-                self._merge_coverage_window(ticker, interval, start, end)
+                for ticker in sorted({r["ticker"] for r in records}):
+                    self._merge_coverage_window(conn, ticker, interval, start, end)
 
     def _cache_has_all_data(self, ticker, start, end, interval = '1d'):
         return len(self._cache_gaps(ticker, start, end, interval)) == 0
@@ -159,7 +185,7 @@ class MarketCache:
             ORDER BY start_ts
         """
 
-        rows = self.conn.execute(query, (ticker, interval, start, end)).fetchall()
+        rows = self._ro_conn.execute(query, (ticker, interval, start, end)).fetchall()
 
         windows = [(row[0], row[1]) for row in rows]
 
@@ -186,7 +212,7 @@ class MarketCache:
         return gaps
 
     
-    def _merge_coverage_window(self, ticker: str, interval: str, start, end) -> None:
+    def _merge_coverage_window(self, conn, ticker: str, interval: str, start, end) -> None:
         start = _to_timestamp(start)
         end = _to_timestamp(end)
 
@@ -194,7 +220,7 @@ class MarketCache:
         merged_end = end
 
         while True:
-            rows = self.conn.execute(
+            rows = conn.execute(
                 """
                 SELECT start_ts, end_ts
                 FROM coverage_windows
@@ -209,7 +235,7 @@ class MarketCache:
             if not rows:
                 break
 
-            self.conn.execute(
+            conn.execute(
                 """
                 DELETE FROM coverage_windows
                 WHERE ticker = ?
@@ -228,7 +254,7 @@ class MarketCache:
 
             merged_start, merged_end = new_start, new_end
 
-        self.conn.execute(
+        conn.execute(
             """
             INSERT OR REPLACE INTO coverage_windows (ticker, interval, start_ts, end_ts)
             VALUES (?, ?, ?, ?)
@@ -326,4 +352,3 @@ def _flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
         df.columns = df.columns.get_level_values(-1)
     return df
-
