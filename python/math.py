@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import networkx as nx
 
-def matrice_correlation(tickers, window_dates):
+def matrice_correlation(tickers, window_dates, return_returns = False):
     dates = np.array(window_dates, dtype='datetime64[D]')
     start = dates.min()  
     end   = dates.max() + np.timedelta64(1, 'D')        
@@ -17,6 +17,9 @@ def matrice_correlation(tickers, window_dates):
     returns = log_high.diff().dropna()
 
     corr = returns.corr()
+
+    if return_returns:
+        return corr, returns
 
     return corr
 
