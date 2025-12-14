@@ -12,31 +12,26 @@ class MarketCache:
     def __init__(self, db_path : str = "data/yfinance/yfinance_cache.duckdb"):
         self.db_path = db_path
         self._initialize_db()
-        self._ro_conn = duckdb.connect(self.db_path, read_only=True)
 
-    def close(self) -> None:
-        if getattr(self, "_ro_conn", None) is not None:
-            self._ro_conn.close()
-            self._ro_conn = None
+    @contextmanager
+    def _read_conn(self):
+        conn = duckdb.connect(self.db_path, read_only=True)
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     @contextmanager
     def _write_conn(self):
-        ro_conn = getattr(self, "_ro_conn", None)
-        if ro_conn is not None:
-            ro_conn.close()
-            self._ro_conn = None
-
         conn = duckdb.connect(self.db_path, read_only=False)
         try:
             yield conn
         finally:
             conn.close()
-            self._ro_conn = duckdb.connect(self.db_path, read_only=True)
 
     def _initialize_db(self):
         # Ensure schema exists (requires a read-write connection).
-        conn = duckdb.connect(self.db_path, read_only=False)
-        try:
+        with self._write_conn() as conn:
             conn.execute("""
         CREATE TABLE IF NOT EXISTS prices (
             ticker      VARCHAR NOT NULL,
@@ -68,8 +63,6 @@ class MarketCache:
             -- invariant: for each (ticker, interval), windows do NOT overlap and are sorted by start_ts
         );
         """)
-        finally:
-            conn.close()
 
     def cache_summary(self):
         # Return a summary of cached data coverage, for every ticker. Show all coverage windows, for every ticker
@@ -78,11 +71,15 @@ class MarketCache:
             FROM coverage_windows
             ORDER BY ticker, interval, start_ts
         """
-        return self._ro_conn.execute(query).fetchdf()
+        with self._read_conn() as conn:
+            return conn.execute(query).fetchdf()
     
-    def get_prices(self, tickers: Iterable[str], start, end, interval="1d"):
+    def get_prices(self, tickers: Iterable[str] | str, start, end, interval="1d"):
         if interval not in {"1d", "1wk", "1mo", "1h", "30m", "15m", "5m", "2m", "1m"}:
             raise ValueError(f"Unsupported interval: {interval}")
+
+        if isinstance(tickers, str):
+            tickers = [tickers]
         tickers = list(tickers)
         start = _to_timestamp(start)
         end = _to_timestamp(end)
@@ -90,10 +87,11 @@ class MarketCache:
         gaps = []
         missing_tickers = []
 
-        for t in tickers:
-            if not self._cache_has_all_data(t, start, end, interval):
-                missing_tickers.append(t)
-                gaps.extend(self._cache_gaps(t, start, end, interval))
+        with self._read_conn() as conn:
+            for t in tickers:
+                if not self._cache_has_all_data(conn, t, start, end, interval):
+                    missing_tickers.append(t)
+                    gaps.extend(self._cache_gaps(conn, t, start, end, interval))
 
         if missing_tickers:
             start_gap = min(g[0] for g in gaps)
@@ -111,9 +109,121 @@ class MarketCache:
             ORDER BY ticker, ts
         """.format(",".join("?" for _ in tickers))
         params = list(tickers) + [interval, start, end]
-        data = self._ro_conn.execute(query, params).fetchdf()
+        with self._read_conn() as conn:
+            data = conn.execute(query, params).fetchdf()
 
         return self._format_like_yf(data, tickers)
+
+    def get_trading_window_bounds(
+        self,
+        n_trading_days: int,
+        *,
+        end=None,
+        start=None,
+        reference_ticker: str = "^GSPC",
+    ) -> tuple[pd.Timestamp, pd.Timestamp]:
+        """
+        Resolve a fixed-length trading-day window using the S&P 500 trading calendar.
+
+        Provide exactly one of:
+        - `start`: window starts on the first trading day on/after `start`
+        - `end`: window ends on the last trading day on/before `end`
+
+        Returns (window_start, window_end) as trading-day timestamps, inclusive on both sides.
+        """
+        if n_trading_days <= 0:
+            raise ValueError("n_trading_days must be positive")
+        if (start is None) == (end is None):
+            raise ValueError("Provide exactly one of start or end")
+
+        if start is not None:
+            anchor = _to_timestamp(start).normalize()
+            window_start = self._align_trading_day(anchor, side="next", reference_ticker=reference_ticker)
+            window_end = self._nth_trading_day_forward(window_start, n_trading_days - 1, reference_ticker=reference_ticker)
+            return window_start, window_end
+
+        anchor = _to_timestamp(end).normalize()
+        window_end = self._align_trading_day(anchor, side="prev", reference_ticker=reference_ticker)
+        window_start = self._nth_trading_day_backward(window_end, n_trading_days - 1, reference_ticker=reference_ticker)
+        return window_start, window_end
+
+    def get_trading_window_end(
+        self,
+        n_trading_days: int,
+        *,
+        end=None,
+        start=None,
+        reference_ticker: str = "^GSPC",
+    ) -> pd.Timestamp:
+        _, window_end = self.get_trading_window_bounds(
+            n_trading_days, end=end, start=start, reference_ticker=reference_ticker
+        )
+        return window_end
+
+    def _trading_days(self, reference_ticker: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DatetimeIndex:
+        df = self.get_prices([reference_ticker], start, end, interval="1d")
+        if df.empty:
+            return pd.DatetimeIndex([])
+
+        idx = pd.DatetimeIndex(pd.to_datetime(df.index))
+        if getattr(idx, "tz", None) is not None:
+            idx = idx.tz_convert(None)
+        idx = idx.normalize()
+        return pd.DatetimeIndex(sorted(set(idx.to_pydatetime())))
+
+    def _align_trading_day(self, date: pd.Timestamp, *, side: str, reference_ticker: str) -> pd.Timestamp:
+        if side not in {"next", "prev"}:
+            raise ValueError("side must be 'next' or 'prev'")
+
+        date = _to_timestamp(date).normalize()
+        if side == "next":
+            start = date
+            end = date + pd.Timedelta(days=14)
+            days = self._trading_days(reference_ticker, start, end + pd.Timedelta(days=1))
+            for d in days:
+                if d >= date:
+                    return pd.Timestamp(d)
+        else:
+            start = date - pd.Timedelta(days=14)
+            end = date
+            days = self._trading_days(reference_ticker, start, end + pd.Timedelta(days=1))
+            for d in reversed(days):
+                if d <= date:
+                    return pd.Timestamp(d)
+
+        raise ValueError(f"No trading day found near {date} for reference ticker {reference_ticker!r}")
+
+    def _nth_trading_day_forward(self, start_day: pd.Timestamp, offset: int, *, reference_ticker: str) -> pd.Timestamp:
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
+        start_day = _to_timestamp(start_day).normalize()
+
+        span_days = max(30, (offset + 1) * 3)
+        for _ in range(10):
+            end = start_day + pd.Timedelta(days=span_days)
+            days = self._trading_days(reference_ticker, start_day, end + pd.Timedelta(days=1))
+            days = days[days >= start_day]
+            if len(days) > offset:
+                return pd.Timestamp(days[offset])
+            span_days *= 2
+
+        raise ValueError(f"Could not resolve {offset} trading days forward from {start_day}")
+
+    def _nth_trading_day_backward(self, end_day: pd.Timestamp, offset: int, *, reference_ticker: str) -> pd.Timestamp:
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
+        end_day = _to_timestamp(end_day).normalize()
+
+        span_days = max(30, (offset + 1) * 3)
+        for _ in range(10):
+            start = end_day - pd.Timedelta(days=span_days)
+            days = self._trading_days(reference_ticker, start, end_day + pd.Timedelta(days=1))
+            days = days[days <= end_day]
+            if len(days) > offset:
+                return pd.Timestamp(days[-(offset + 1)])
+            span_days *= 2
+
+        raise ValueError(f"Could not resolve {offset} trading days backward from {end_day}")
 
     def _download_from_yfinance(self, tickers, start, end, interval):
         print(f"Downloading from yfinance: {tickers} {start} - {end} @ {interval}")
@@ -168,10 +278,10 @@ class MarketCache:
                 for ticker in sorted({r["ticker"] for r in records}):
                     self._merge_coverage_window(conn, ticker, interval, start, end)
 
-    def _cache_has_all_data(self, ticker, start, end, interval = '1d'):
-        return len(self._cache_gaps(ticker, start, end, interval)) == 0
+    def _cache_has_all_data(self, conn, ticker, start, end, interval = '1d'):
+        return len(self._cache_gaps(conn, ticker, start, end, interval)) == 0
 
-    def _cache_gaps(self, ticker, start, end, interval):
+    def _cache_gaps(self, conn, ticker, start, end, interval):
         start = _to_timestamp(start)
         end = _to_timestamp(end)
 
@@ -185,7 +295,7 @@ class MarketCache:
             ORDER BY start_ts
         """
 
-        rows = self._ro_conn.execute(query, (ticker, interval, start, end)).fetchall()
+        rows = conn.execute(query, (ticker, interval, start, end)).fetchall()
 
         windows = [(row[0], row[1]) for row in rows]
 

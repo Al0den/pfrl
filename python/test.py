@@ -1,11 +1,14 @@
 import yfinance as yf
 import pandas
 
-from python.market_cache import MarketCache
+from python.config import market, tickers
+from python.math import matrice_correlation, weighted_graph_from_corr
+from python.geometry import embedding_laplacian_eigenmaps
 
-tickers = ["AAPL"]
-start = "2008-11-01"
-end = "2025-12-01"
+window_dates = market.get_trading_window_bounds(30, end="2025-12-12")
 
-cache = MarketCache()
-data = cache.get_prices(tickers, start, end, "1d")
+corr = matrice_correlation(tickers, window_dates)
+W, D, L, G = weighted_graph_from_corr(tickers, corr)
+
+X = embedding_laplacian_eigenmaps(W, d=2, normalized=True)
+print(X.info())
