@@ -71,7 +71,12 @@ def main():
     p.add_argument("--end", type=str, required=True)
     p.add_argument("--reference", type=str, default="^GSPC")
     p.add_argument("--lookback", type=int, default=252)
-    p.add_argument("--out", type=str, default="rl/data/features_train.npz")
+    p.add_argument("--out_train", type=str, default="rl/data/features_train.npz")
+    p.add_argument("--out_val", type=str, default="rl/data/features_val.npz")
+    p.add_argument("--out_test", type=str, default="rl/data/features_test.npz")
+
+    p.add_argument("--test_percentage", type=float, default=0.1)
+    p.add_argument("--val_percentage", type=float, default=0.2)
 
     # U sampling.
     p.add_argument("--include_u_samp", action="store_true", help="Store U_samp (T,K) sampled from global grid.")
@@ -109,7 +114,7 @@ def main():
         corr, returns = matrice_correlation(tickers_list, (window_start, window_end), return_returns=True)
         W, _, _, _ = weighted_graph_from_corr(tickers_list, corr)
 
-        X_df = embedding_laplacian_eigenmaps(W, d=9, normalized=True)
+        X_df = embedding_laplacian_eigenmaps(W, d=9)
         dim_cols = sorted(
             (c for c in X_df.columns if c.startswith("Dim_")),
             key=lambda c: int(c.split("_")[1])
@@ -169,9 +174,24 @@ def main():
 
         print(f"Computed U_samp: {U_samp.shape}")
 
-    out_path = args.out
-    print(f"[save] {out_path}")
-    np.savez_compressed(out_path, **save_dict)
+    # Separate into training, validation, test sets 
+    test_size = int(T * args.test_percentage)
+    val_size = int(T * args.val_percentage)
+    train_size = T - val_size - test_size
+
+    splits = {
+        "train": (0, train_size, args.out_train),
+        "val": (train_size, train_size + val_size, args.out_val),
+        "test": (train_size + val_size, T, args.out_test),
+    }
+
+    for split_name, (start_idx, end_idx, out_path) in splits.items():
+        split_dict = {
+            k: v[start_idx:end_idx] for k, v in save_dict.items()
+        }
+        print(f"[save {split_name}] {out_path}")
+        np.savez_compressed(out_path, **split_dict)
+
     print("[done]")
 
 
