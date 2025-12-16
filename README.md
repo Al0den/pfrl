@@ -62,7 +62,11 @@ D_{ii} = \sum_{j=1}^{N} W_{ij}
 $$
 
 ![example_graph](https://github.com/user-attachments/assets/d1948367-36b4-4167-a7b4-2330aee33b9e)
-
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/d1948367-36b4-4167-a7b4-2330aee33b9e" alt="example_graph" />
+  <br/>
+  <em>Figure 1: Example graph</em>
+</p>
 
 
 ### 3. Normalized Graph Laplacian
