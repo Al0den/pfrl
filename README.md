@@ -2,7 +2,7 @@
 
 A geometric and spectral representation of financial markets based on correlation graphs, manifold embeddings, and induced potential fields.
 
----
+
 
 ## Overview
 
@@ -16,7 +16,7 @@ This project models a universe of assets as a **dynamic geometric system**:
 
 The approach is deterministic, interpretable, and grounded in spectral graph theory and kernel methods.
 
----
+
 
 ## Mathematical Summary (Quick)
 
@@ -31,7 +31,7 @@ r_{t,i} = \log P_{t,i} - \log P_{t-1,i}.
 
 On a rolling window, a correlation matrix \( C \in \mathbb{R}^{N \times N} \) is estimated.
 
----
+
 
 ### 2. Similarity Graph
 
@@ -44,7 +44,7 @@ This yields a symmetric adjacency matrix \( W \ge 0 \), and a degree matrix
 D_{ii} = \sum_j W_{ij}.
 \]
 
----
+
 
 ### 3. Normalized Graph Laplacian
 
@@ -55,7 +55,7 @@ L = I - D^{-1/2} W D^{-1/2}.
 
 This operator is invariant to degree scaling and approximates the Laplace–Beltrami operator of an underlying manifold.
 
----
+
 
 ### 4. Spectral Embedding (Laplacian Eigenmaps)
 
@@ -75,7 +75,7 @@ Each asset is represented as a point in a low-dimensional latent space.
 
 To ensure temporal consistency, embeddings are aligned across time using **orthogonal Procrustes alignment**.
 
----
+
 
 ### 5. Scalar Signal on Assets
 
@@ -85,7 +85,7 @@ A scalar signal \( \phi \in \mathbb{R}^N \) is computed per asset, e.g.:
 
 It is normalized to zero mean and unit variance.
 
----
+
 
 ### 6. Potential Field
 
@@ -103,38 +103,7 @@ F(g) = - \nabla U(g).
 
 This field reveals collective structure, attractors, and repulsive regions in the embedded space.
 
----
 
-## Project Structure
-
-├── python/
-│ ├── config.py # Tickers and global parameters
-│ ├── market_cache.py # Market data cache (DuckDB + yfinance)
-│ ├── math.py # Correlation matrices, graph weights
-│ ├── geometry.py # Laplacians, eigenmaps, Procrustes alignment
-│ ├── fields/
-│ │ ├── signals.py # Scalar signals (momentum, risk-adjusted)
-│ │ ├── potential.py # Potential field and forces
-│ └── utilities/
-│ └── grid.py # Grid generation (2D / 3D)
-│
-├── rl/ # Optional downstream usage layer
-│ ├── preprocessing/ # Feature construction
-│ ├── env/ # Environment wrappers
-│ └── agents/ # Learning agents
-│
-├── scripts/
-│ ├── visuals/ # Static and dynamic visualizations
-│ └── vis_market_corr.py # Correlation graph visualization
-│
-├── test/
-│ └── test_market_cache.py # Unit and integration tests
-│
-├── requirements.txt
-└── README.md
-
-
----
 
 ## Visualizations
 
@@ -145,7 +114,7 @@ The project includes scripts to:
 
 These are located in `scripts/visuals/`.
 
----
+
 
 ## Design Principles
 
@@ -154,7 +123,7 @@ These are located in `scripts/visuals/`.
 - **Deterministic core**: no stochastic components in the geometry.
 - **Separation of concerns**: data, geometry, fields, and downstream usage are cleanly decoupled.
 
----
+
 
 ## References
 
@@ -170,7 +139,7 @@ These are located in `scripts/visuals/`.
   *Diffusion Maps*  
   Appl. Comput. Harmonic Analysis, 2006.
 
----
+
 
 ## Notes
 
