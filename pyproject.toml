@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["test"]
+
+markers = [
+    "integration: tests d’intégration (lents, I/O, DB, réseau)"
+]

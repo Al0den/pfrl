@@ -30,42 +30,39 @@ class MarketCache:
             conn.close()
 
     def _initialize_db(self):
-        # Ensure schema exists (requires a read-write connection).
         with self._write_conn() as conn:
             conn.execute("""
-        CREATE TABLE IF NOT EXISTS prices (
-            ticker      VARCHAR NOT NULL,
-            interval    VARCHAR NOT NULL,    
-            ts          TIMESTAMP NOT NULL, 
+                CREATE TABLE IF NOT EXISTS prices (
+                    ticker      VARCHAR NOT NULL,
+                    interval    VARCHAR NOT NULL,    
+                    ts          TIMESTAMP NOT NULL, 
 
-            open        DOUBLE,
-            high        DOUBLE,
-            low         DOUBLE,
-            close       DOUBLE,
-            adj_close   DOUBLE,
-            volume      BIGINT,
+                    open        DOUBLE,
+                    high        DOUBLE,
+                    low         DOUBLE,
+                    close       DOUBLE,
+                    adj_close   DOUBLE,
+                    volume      BIGINT,
 
-            source      VARCHAR,   
-            downloaded_at TIMESTAMP,        
+                    source      VARCHAR,   
+                    downloaded_at TIMESTAMP,        
 
-            PRIMARY KEY (ticker, interval, ts)
-        );
-        """)
+                    PRIMARY KEY (ticker, interval, ts)
+                );
+            """)
 
             conn.execute("""
-        CREATE TABLE IF NOT EXISTS coverage_windows (
-            ticker      VARCHAR NOT NULL,
-            interval    VARCHAR NOT NULL,
-            start_ts    TIMESTAMP NOT NULL,  -- inclusive
-            end_ts      TIMESTAMP NOT NULL,  -- exclusive, or inclusive+1bar
+                CREATE TABLE IF NOT EXISTS coverage_windows (
+                    ticker      VARCHAR NOT NULL,
+                    interval    VARCHAR NOT NULL,
+                    start_ts    TIMESTAMP NOT NULL,  -- inclusive
+                    end_ts      TIMESTAMP NOT NULL,  -- exclusive, or inclusive+1bar
 
-            PRIMARY KEY (ticker, interval, start_ts)
-            -- invariant: for each (ticker, interval), windows do NOT overlap and are sorted by start_ts
-        );
-        """)
+                    PRIMARY KEY (ticker, interval, start_ts)
+                );
+            """)
 
     def cache_summary(self):
-        # Return a summary of cached data coverage, for every ticker. Show all coverage windows, for every ticker
         query = """
             SELECT ticker, interval, start_ts, end_ts
             FROM coverage_windows
@@ -80,6 +77,7 @@ class MarketCache:
 
         if isinstance(tickers, str):
             tickers = [tickers]
+
         tickers = list(tickers)
         start = _to_timestamp(start)
         end = _to_timestamp(end)
@@ -98,39 +96,25 @@ class MarketCache:
             end_gap = max(g[1] for g in gaps)
 
             self._download_from_yfinance(missing_tickers, start_gap, end_gap, interval)
+        tickers = [str(t) for t in tickers]
 
         query = """
             SELECT ticker, interval, ts, open, high, low, close, adj_close, volume
             FROM prices
-            WHERE ticker IN ({})
-                AND interval = ?
-                AND ts >= ?
-                AND ts < ?
+            WHERE ticker IN (SELECT * FROM UNNEST(?))
+            AND interval = ?
+            AND ts >= ?
+            AND ts < ?
             ORDER BY ticker, ts
-        """.format(",".join("?" for _ in tickers))
-        params = list(tickers) + [interval, start, end]
+        """
+        params = [tickers, interval, start, end]
+
         with self._read_conn() as conn:
             data = conn.execute(query, params).fetchdf()
 
         return self._format_like_yf(data, tickers)
 
-    def get_trading_window_bounds(
-        self,
-        n_trading_days: int,
-        *,
-        end=None,
-        start=None,
-        reference_ticker: str = "^GSPC",
-    ) -> tuple[pd.Timestamp, pd.Timestamp]:
-        """
-        Resolve a fixed-length trading-day window using the S&P 500 trading calendar.
-
-        Provide exactly one of:
-        - `start`: window starts on the first trading day on/after `start`
-        - `end`: window ends on the last trading day on/before `end`
-
-        Returns (window_start, window_end) as trading-day timestamps, inclusive on both sides.
-        """
+    def get_trading_window_bounds(self, n_trading_days, *, end=None, start=None, reference_ticker = "^GSPC"):
         if n_trading_days <= 0:
             raise ValueError("n_trading_days must be positive")
         if (start is None) == (end is None):
@@ -147,20 +131,13 @@ class MarketCache:
         window_start = self._nth_trading_day_backward(window_end, n_trading_days - 1, reference_ticker=reference_ticker)
         return window_start, window_end
 
-    def get_trading_window_end(
-        self,
-        n_trading_days: int,
-        *,
-        end=None,
-        start=None,
-        reference_ticker: str = "^GSPC",
-    ) -> pd.Timestamp:
+    def get_trading_window_end(self, n_trading_days, *, end=None, start=None, reference_ticker = "^GSPC"):
         _, window_end = self.get_trading_window_bounds(
             n_trading_days, end=end, start=start, reference_ticker=reference_ticker
         )
         return window_end
 
-    def _trading_days(self, reference_ticker: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DatetimeIndex:
+    def _trading_days(self, reference_ticker: str, start: pd.Timestamp, end: pd.Timestamp):
         df = self.get_prices([reference_ticker], start, end, interval="1d")
         if df.empty:
             return pd.DatetimeIndex([])
@@ -227,60 +204,132 @@ class MarketCache:
 
     def _download_from_yfinance(self, tickers, start, end, interval):
         print(f"Downloading from yfinance: {tickers} {start} - {end} @ {interval}")
+
         df = yf.download(
             tickers=list(tickers),
             start=start,
             end=end,
             interval=interval,
-            group_by='ticker',
+            group_by="ticker",
             auto_adjust=False,
             threads=True,
         )
+        assert df is not None
 
-        records = []
         downloaded_at = pd.Timestamp.now()
 
-        for ticker in tickers:
-            ticker_df = _select_ticker_frame(df, ticker)
-            if ticker_df is None:
-                continue
-            ticker_df = _flatten_columns(ticker_df).reset_index()
+        if isinstance(df.columns, pd.MultiIndex):
+            cols0 = df.columns.get_level_values(0)
+            cols1 = df.columns.get_level_values(1)
 
-            ts_col = "Date" if "Date" in ticker_df.columns else ("Datetime" if "Datetime" in ticker_df.columns else ticker_df.columns[0])
-            for _, row in ticker_df.iterrows():
-                record = {
-                    "ticker": ticker,
-                    "interval": interval,
-                    "ts": row[ts_col],
-                    "open": row['Open'],
-                    "high": row['High'],
-                    "low": row['Low'],
-                    "close": row['Close'],
-                    "adj_close": row['Adj Close'],
-                    "volume": row['Volume'],
-                    "source": "yfinance",
-                    "downloaded_at": downloaded_at,
-                }
-                records.append(record)
+            tick_set = set(tickers)
+            if len(tick_set.intersection(set(cols0))) > 0:
+                wide = df.copy()
+                wide.columns = wide.columns.set_names(["Ticker", "Field"])
+                long = (
+                    wide.stack(level="Ticker", future_stack=True)
+                        .reset_index()
+                        .rename(columns={"level_0": "ts"})
+                )
+            else:
+                wide = df.copy()
+                wide.columns = wide.columns.swaplevel(0, 1)
+                wide.columns = wide.columns.set_names(["Ticker", "Field"])
+                long = (
+                    wide.stack(level="Ticker", future_stack=True)
+                        .reset_index()
+                        .rename(columns={"level_0": "ts"})
+                )
+        else:
+            t0 = list(tickers)[0] if isinstance(tickers, (list, tuple)) else str(tickers)
+            tmp = df.copy()
+            tmp["Ticker"] = t0
+            long = tmp.reset_index().rename(columns={tmp.index.name or "index": "ts"})
 
-        if records:
-            # Only hold a write connection during the actual DB modifications.
-            with self._write_conn() as conn:
-                conn.executemany("""
-                    INSERT OR REPLACE INTO prices 
-                    (ticker, interval, ts, open, high, low, close, adj_close, volume, source, downloaded_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, [(
-                    r['ticker'], r['interval'], r['ts'], r['open'], r['high'], r['low'], r['close'],
-                    r['adj_close'], r['volume'], r['source'], r['downloaded_at']
-                ) for r in records])
 
-                for ticker in sorted({r["ticker"] for r in records}):
-                    self._merge_coverage_window(conn, ticker, interval, start, end)
+        long = long.rename(columns={"Date": "ts"})
 
+        want = ["ts", "Ticker", "Open", "High", "Low", "Close", "Adj Close", "Volume"]
+        for c in want:
+            if c not in long.columns:
+                long[c] = pd.NA
+
+        long = long[want].rename(columns={"Ticker": "ticker"})
+        long["interval"] = interval
+        long["source"] = "yfinance"
+        long["downloaded_at"] = downloaded_at
+
+        long["ts"] = pd.to_datetime(long["ts"])
+        long["Volume"] = pd.to_numeric(long["Volume"], errors="coerce").astype("Int64")
+
+        long = long.rename(
+            columns={
+                "Open": "open",
+                "High": "high",
+                "Low": "low",
+                "Close": "close",
+                "Adj Close": "adj_close",
+                "Volume": "volume",
+            }
+        )
+
+        long = long.dropna(subset=["ts"])
+        if long.empty:
+            return
+
+        with self._write_conn() as conn:
+            conn.execute("BEGIN TRANSACTION;")
+            try:
+                conn.register("tmp_prices", long)
+                conn.execute("""
+                    INSERT OR REPLACE INTO prices
+                    SELECT
+                        ticker,
+                        interval,
+                        ts,
+                        open,
+                        high,
+                        low,
+                        close,
+                        adj_close,
+                        volume,
+                        source,
+                        downloaded_at
+                    FROM tmp_prices
+                """)
+
+                conn.unregister("tmp_prices")
+
+                inserted_tickers = (
+                    conn.execute("SELECT DISTINCT ticker FROM prices WHERE downloaded_at = ?", [downloaded_at])
+                        .fetchall()
+                )
+                inserted_tickers = [r[0] for r in inserted_tickers]
+                inserted_ranges = conn.execute("""
+                    SELECT ticker, MIN(ts) AS min_ts, MAX(ts) AS max_ts
+                    FROM prices
+                    WHERE downloaded_at = ?
+                    AND interval = ?
+                    AND ticker IN ({})
+                    GROUP BY ticker
+                """.format(",".join("?" for _ in tickers)), [downloaded_at, interval, *list(tickers)]
+                ).fetchall()
+
+                for t, min_ts, max_ts in inserted_ranges:
+                    if min_ts is None or max_ts is None:
+                        continue
+                   
+                    end_excl = pd.Timestamp(max_ts) + pd.Timedelta(days=1) if interval == "1d" else pd.Timestamp(max_ts)
+                    self._merge_coverage_window(conn, t, interval, pd.Timestamp(min_ts), end_excl)
+
+                conn.execute("COMMIT;")
+            except Exception:
+                conn.execute("ROLLBACK;")
+                raise
+            
     def _cache_has_all_data(self, conn, ticker, start, end, interval = '1d'):
         return len(self._cache_gaps(conn, ticker, start, end, interval)) == 0
-
+    
     def _cache_gaps(self, conn, ticker, start, end, interval):
         start = _to_timestamp(start)
         end = _to_timestamp(end)
@@ -315,7 +364,6 @@ class MarketCache:
             if cursor >= end:
                 break
 
-        # gap after the last window
         if cursor < end:
             gaps.append((cursor, end))
 
@@ -374,25 +422,11 @@ class MarketCache:
 
         
     def _format_like_yf(self, data: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
-        """
-        Convert long-form (ticker, ts, open, high, ...) into a DataFrame
-        shaped like yfinance.download:
-        - index: DatetimeIndex named 'Date'
-        - single ticker: columns = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
-        - multiple tickers: MultiIndex columns (Ticker, Price) with Price in that same list.
-        """
         if data.empty:
-            # Match yfinance: return empty DataFrame with proper index name
             out = pd.DataFrame()
             out.index.name = "Date"
             return out
 
-        # Ensure ts is datetime and sorted
-        data = data.copy()
-        data["ts"] = pd.to_datetime(data["ts"])
-        data = data.sort_values(["ts", "ticker"])
-
-        # Normalize column names to yfinance spelling
         rename_map = {
             "open": "Open",
             "high": "High",
@@ -401,42 +435,41 @@ class MarketCache:
             "adj_close": "Adj Close",
             "volume": "Volume",
         }
-        value_cols = list(rename_map.keys())
+        ycols = ["Open", "High", "Low", "Close", "Adj Close", "Volume"]
+
+        df = data.copy()
+        df["ts"] = pd.to_datetime(df["ts"])
+        df["ticker"] = df["ticker"].astype(str)
+
+        df = df.sort_values(["ts", "ticker"]).drop_duplicates(subset=["ts", "ticker"], keep="last")
+
+        tickers = [str(t) for t in tickers]
 
         if len(tickers) == 1:
-            # Single-ticker case: simple columns, no MultiIndex
             t = tickers[0]
-            df = (
-                data.loc[data["ticker"] == t, ["ts"] + value_cols]
-                .set_index("ts")
-                .rename(columns=rename_map)
-            )
-            df.index.name = "Date"
-            return df
+            sub = df[df["ticker"] == t].set_index("ts")
+            sub = sub.rename(columns=rename_map)
+            out = sub.reindex(columns=ycols).sort_index()
+            out.index.name = "Date"
+            return out
 
-        # Multi-ticker case: build MultiIndex columns (Ticker, Price)
-        # Long -> wide, then swap levels.
-        df = (
-            data[["ts", "ticker"] + value_cols]
-            .set_index(["ts", "ticker"])
-            [value_cols]
-            .unstack("ticker")  # columns: (value, ticker)
-        )
+        pieces = []
+        for t in tickers:
+            sub = df[df["ticker"] == t]
+            if sub.empty:
+                part = pd.DataFrame(columns=ycols, index=pd.DatetimeIndex([], name="Date"))
+            else:
+                part = sub.set_index("ts").rename(columns=rename_map)
+                part = part.reindex(columns=ycols).sort_index()
+                part.index.name = "Date"
 
-        # Now columns are (value, ticker); we want (ticker, Price)
-        df.columns = df.columns.swaplevel(0, 1)  # (ticker, value)
-        df = df.sort_index(axis=1, level=0)
+            part.columns = pd.MultiIndex.from_product([[t], part.columns], names=["Ticker", "Price"])
+            pieces.append(part)
 
-        # Rename 'value' level to proper yfinance-style price labels
-        new_cols = []
-        for ticker, field in df.columns:
-            field_title = rename_map[field]  # e.g. 'open' -> 'Open'
-            new_cols.append((ticker, field_title))
+        out = pd.concat(pieces, axis=1).sort_index()
+        out.index.name = "Date"
+        return out
 
-        df.columns = pd.MultiIndex.from_tuples(new_cols, names=["Ticker", "Price"])
-        df.index.name = "Date"
-
-        return df
 
 
 def _to_timestamp(value) -> pd.Timestamp:

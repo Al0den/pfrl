@@ -1,4 +1,5 @@
 .env
 **/__pycache__/
-data/*
+**/data/*
 visuals/*
+.pytest_cache/

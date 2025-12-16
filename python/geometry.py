@@ -54,9 +54,19 @@ def fix_signs(X_prev, X_curr):
             X[:, k] = -X[:, k]
     return X
 
-def procrustes_align(X_prev, X_curr):
-    M = X_curr.T @ X_prev
+def procrustes_align(X_new: np.ndarray, X_ref: np.ndarray) -> np.ndarray:
+    mu_new = X_new.mean(axis=0, keepdims=True)
+    mu_ref = X_ref.mean(axis=0, keepdims=True)
+    A = X_new - mu_new
+    B = X_ref - mu_ref
+
+    M = A.T @ B
     U, _, Vt = np.linalg.svd(M)
-    Q = U @ Vt
-    return X_curr @ Q
+    R = U @ Vt
+
+    if np.linalg.det(R) < 0:
+        U[:, -1] *= -1
+        R = U @ Vt
+
+    return (A @ R) + mu_ref
 
