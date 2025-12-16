@@ -133,9 +133,6 @@ $$
 
 This field reveals collective structure, attractors, and repulsive regions in the embedded space.
 
-![potential_landscape](https://github.com/user-attachments/assets/7a14bcb3-eb63-4b57-8327-6c01b72daf7f)
-
-
 <p align="center">
   <img src="https://github.com/user-attachments/assets/7a14bcb3-eb63-4b57-8327-6c01b72daf7f" alt="potential_landscape" />
   <br/>
