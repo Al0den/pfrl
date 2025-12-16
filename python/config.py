@@ -32,7 +32,7 @@ tickers = [
     "T", "VZ", "DIS", "CMCSA",
 
     # Indice de référence
-    "^GSPC", "DJI"
+    "^GSPC"
 ]
 
 

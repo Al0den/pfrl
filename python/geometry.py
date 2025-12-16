@@ -11,15 +11,11 @@ def laplacian_sym_normalized(W, eps = 1e-12):
     L_sym = np.eye(Wv.shape[0]) - D_inv_sqrt @ Wv @ D_inv_sqrt
     return L_sym
 
-def embedding_laplacian_eigenmaps(W, d = 2, normalized = True, tol = 1e-9, return_evals = False):
+def embedding_laplacian_eigenmaps(W, d = 2, tol = 1e-9, return_evals = False):
     tickers = list(W.index)
     N = len(tickers)
 
-    if normalized:
-        L = laplacian_sym_normalized(W)
-    else:
-        D = matrice_deg(W).values
-        L = D - W.values
+    L = laplacian_sym_normalized(W, eps=tol)
     
     evals, evecs = np.linalg.eigh(L)
 

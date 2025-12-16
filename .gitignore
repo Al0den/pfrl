@@ -4,3 +4,4 @@
 visuals/*
 .pytest_cache/
 .DS_Store
+paper/*

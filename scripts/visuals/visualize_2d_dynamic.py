@@ -159,7 +159,7 @@ def main():
         corr, returns = matrice_correlation(tickers, (window_start, window_end), return_returns=True)
         W, D, L, G = weighted_graph_from_corr(tickers, corr)
 
-        X_df = embedding_laplacian_eigenmaps(W, d=2, normalized=True)
+        X_df = embedding_laplacian_eigenmaps(W, d=2)
         X = np.column_stack([X_df["Dim_1"].to_numpy(), X_df["Dim_2"].to_numpy()]).astype(float)
 
         if X_prev is not None:

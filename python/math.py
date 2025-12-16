@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 import networkx as nx
 
+from python.geometry import laplacian_sym_normalized
+
 def matrice_correlation(tickers, window_dates, return_returns = False):
     dates = np.array(window_dates, dtype='datetime64[D]')
     start = dates.min()  
@@ -46,13 +48,13 @@ def matrice_deg(W):
     return D
 
 def matrice_laplacien(W, D):
+    print("eadasdsa")
     return D - W
 
 def weighted_graph_from_corr(tickers, corr):
     W = matrice_poids_knn(corr)
-
     D = matrice_deg(W)
-    L = matrice_laplacien(W, D)
+    L = laplacian_sym_normalized(W)
 
     G = nx.Graph()
 

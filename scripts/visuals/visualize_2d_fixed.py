@@ -22,7 +22,7 @@ window_dates = market.get_trading_window_bounds(60, end="2019-12-12")
 corr, returns = matrice_correlation(tickers, window_dates, return_returns=True)
 W, D, L, G = weighted_graph_from_corr(tickers, corr)
 
-X = embedding_laplacian_eigenmaps(W, d=2, normalized=True)
+X = embedding_laplacian_eigenmaps(W, d=2)
 
 phi = phi_risk_adjusted_momentum(returns)
 grid, xx, yy = make_grid_2d(X, n=250, margin=0.5)  # n plus grand => plus lisse
