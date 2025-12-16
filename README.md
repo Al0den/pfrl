@@ -2,7 +2,7 @@
 
 A geometric and spectral representation of financial markets based on correlation graphs, manifold embeddings, and induced potential fields.
 
----
+
 
 ## Overview
 
@@ -16,13 +16,13 @@ This project models a universe of assets as a **dynamic geometric system**:
 
 The approach is deterministic, interpretable, and grounded in spectral graph theory and kernel methods.
 
----
+
 
 ## Mathematical Summary
 
 This section provides a concise mathematical overview of the core construction.
 
----
+
 
 ### 1. Returns and Correlation
 
@@ -40,7 +40,7 @@ $$
 
 where \( N \) is the number of assets.
 
----
+
 
 ### 2. Similarity Graph
 
@@ -61,7 +61,7 @@ $$
 D_{ii} = \sum_{j=1}^{N} W_{ij}
 $$
 
----
+
 
 ### 3. Normalized Graph Laplacian
 
@@ -73,7 +73,7 @@ $$
 
 This operator is invariant to degree scaling and approximates the Laplace–Beltrami operator of an underlying continuous manifold.
 
----
+
 
 ### 4. Spectral Embedding (Laplacian Eigenmaps)
 
@@ -95,7 +95,7 @@ Each asset is represented as a point in a latent geometric space.
 
 To ensure temporal consistency, embeddings are aligned across time using **orthogonal Procrustes alignment**.
 
----
+
 
 ### 5. Scalar Signal on Assets
 
@@ -108,7 +108,7 @@ $$
 Typical examples include momentum or risk-adjusted momentum.  
 The signal is standardized to zero mean and unit variance.
 
----
+
 
 ### 6. Potential Field
 
@@ -128,7 +128,49 @@ $$
 
 This field reveals collective structure, attractors, and repulsive regions in the embedded space.
 
----
 
-## Project Structure
 
+
+
+
+## Visualizations
+
+The project includes scripts to:
+
+- plot correlation graphs,
+- visualize 2D and 3D potential landscapes,
+- generate animated time-evolving embeddings and fields.
+
+These scripts are located in `scripts/visuals/`.
+
+
+
+## Design Principles
+
+- **Geometry-first**: structure emerges from correlations, not heuristics.
+- **Spectral methods**: stable, well-founded, interpretable.
+- **Deterministic core**: no stochastic components in the geometry.
+- **Separation of concerns**: data, geometry, fields, and downstream usage are cleanly decoupled.
+
+
+
+## References
+
+- Belkin, M., & Niyogi, P.  
+  *Laplacian Eigenmaps and Spectral Techniques for Embedding and Clustering*  
+  NIPS, 2001.
+
+- Chung, F.  
+  *Spectral Graph Theory*  
+  AMS, 1997.
+
+- Coifman, R. R., & Lafon, S.  
+  *Diffusion Maps*  
+  Applied and Computational Harmonic Analysis, 2006.
+
+
+
+## Notes
+
+This repository focuses on the **mathematical and geometric layer**.
+Downstream usage (e.g. optimization or learning) is optional and treated as a separate concern.
