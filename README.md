@@ -61,6 +61,8 @@ $$
 D_{ii} = \sum_{j=1}^{N} W_{ij}
 $$
 
+![example_graph](https://github.com/user-attachments/assets/d1948367-36b4-4167-a7b4-2330aee33b9e)
+
 
 
 ### 3. Normalized Graph Laplacian
@@ -128,6 +130,7 @@ $$
 
 This field reveals collective structure, attractors, and repulsive regions in the embedded space.
 
+![potential_landscape](https://github.com/user-attachments/assets/7a14bcb3-eb63-4b57-8327-6c01b72daf7f)
 
 
 
